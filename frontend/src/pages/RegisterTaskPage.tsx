@@ -67,6 +67,7 @@ export default function RegisterTaskPage() {
         cfworker_api_url: cfg.cfworker_api_url || '',
         cfworker_admin_token: cfg.cfworker_admin_token || '',
         cfworker_custom_auth: cfg.cfworker_custom_auth || '',
+        cfworker_domain: cfg.cfworker_domain || '',
         cfworker_domain_override: '',
         cfworker_subdomain: cfg.cfworker_subdomain || '',
         cfworker_random_subdomain: parseBooleanConfigValue(cfg.cfworker_random_subdomain),
@@ -113,6 +114,7 @@ export default function RegisterTaskPage() {
       cfworker_api_url: values.cfworker_api_url,
       cfworker_admin_token: values.cfworker_admin_token,
       cfworker_custom_auth: values.cfworker_custom_auth,
+      cfworker_domain: values.cfworker_domain,
       cfworker_domain_override: values.cfworker_domain_override,
       cfworker_subdomain: values.cfworker_subdomain,
       cfworker_random_subdomain: values.cfworker_random_subdomain,
@@ -345,6 +347,13 @@ export default function RegisterTaskPage() {
               </Form.Item>
               <Form.Item name="cfworker_custom_auth" label="Site Password">
                 <Input.Password placeholder="private site password" />
+              </Form.Item>
+              <Form.Item
+                name="cfworker_domain"
+                label="根域名（推荐填写）"
+                extra="建议直接填写后端已配置的可用域名，例如 coinowl.net，避免后端默认域名选择不稳定。"
+              >
+                <Input placeholder="coinowl.net" />
               </Form.Item>
               <Form.Item
                 name="cfworker_domain_override"

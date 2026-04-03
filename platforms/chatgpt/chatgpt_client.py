@@ -17,6 +17,7 @@ except ImportError:
 
     sys.exit(1)
 
+from .sentinel_browser import get_browser_sentinel_token
 from .sentinel_token import build_sentinel_token
 from .utils import (
     FlowState,
@@ -596,6 +597,31 @@ class ChatGPTClient:
         """
         self._log(f"注册用户: {email}")
         url = f"{self.AUTH}/api/accounts/user/register"
+        sentinel_flow = "username_password_create"
+
+        sentinel_token = get_browser_sentinel_token(
+            session=self.session,
+            device_id=self.device_id,
+            flow=sentinel_flow,
+            proxy=self.proxy,
+            user_agent=self.ua,
+            accept_language=self.accept_language,
+            referer=f"{self.AUTH}/create-account/password",
+        )
+        if sentinel_token:
+            self._log("register: 已通过浏览器获取 sentinel token")
+        else:
+            self._log("register: 浏览器 token 获取失败，回退纯 HTTP Sentinel")
+            sentinel_token = build_sentinel_token(
+                self.session,
+                self.device_id,
+                flow=sentinel_flow,
+                user_agent=self.ua,
+                sec_ch_ua=self.sec_ch_ua,
+                impersonate=self.impersonate,
+            )
+            if sentinel_token:
+                self._log("register: 已回退生成 sentinel token")
 
         headers = self._headers(
             url,
@@ -604,7 +630,13 @@ class ChatGPTClient:
             origin=self.AUTH,
             content_type="application/json",
             fetch_site="same-origin",
+            extra_headers={
+                "oai-device-id": self.device_id,
+                "ext-passkey-client-capabilities": "{}",
+            },
         )
+        if sentinel_token:
+            headers["openai-sentinel-token"] = sentinel_token
         headers.update(generate_datadog_trace())
 
         payload = {
@@ -720,18 +752,32 @@ class ChatGPTClient:
         self._log(f"完成账号创建: {name}")
         url = f"{self.AUTH}/api/accounts/create_account"
 
-        sentinel_token = build_sentinel_token(
-            self.session,
-            self.device_id,
-            flow="authorize_continue",
+        sentinel_flow = "username_password_create"
+        sentinel_token = get_browser_sentinel_token(
+            session=self.session,
+            device_id=self.device_id,
+            flow=sentinel_flow,
+            proxy=self.proxy,
             user_agent=self.ua,
-            sec_ch_ua=self.sec_ch_ua,
-            impersonate=self.impersonate,
+            accept_language=self.accept_language,
+            referer=f"{self.AUTH}/about-you",
         )
         if sentinel_token:
-            self._log("create_account: 已生成 sentinel token")
+            self._log("create_account: 已通过浏览器获取 sentinel token")
         else:
-            self._log("create_account: 未生成 sentinel token，降级继续请求")
+            self._log("create_account: 浏览器 token 获取失败，回退纯 HTTP Sentinel")
+            sentinel_token = build_sentinel_token(
+                self.session,
+                self.device_id,
+                flow=sentinel_flow,
+                user_agent=self.ua,
+                sec_ch_ua=self.sec_ch_ua,
+                impersonate=self.impersonate,
+            )
+            if sentinel_token:
+                self._log("create_account: 已回退生成 sentinel token")
+            else:
+                self._log("create_account: 未生成 sentinel token，降级继续请求")
 
         headers = self._headers(
             url,
@@ -742,6 +788,7 @@ class ChatGPTClient:
             fetch_site="same-origin",
             extra_headers={
                 "oai-device-id": self.device_id,
+                "ext-passkey-client-capabilities": "{}",
             },
         )
         if sentinel_token:

@@ -20,6 +20,8 @@ from .oauth import (
     generate_oauth_url,
     submit_callback_url,
 )
+from .sentinel_browser import get_browser_sentinel_token
+from .sentinel_token import build_sentinel_token
 
 AUTH_BASE = "https://auth.openai.com"
 SENTINEL_API = "https://sentinel.openai.com/backend-api/sentinel/req"
@@ -204,6 +206,24 @@ class OAuthPkceClient:
         """向 user/register 提交密码，返回 continue_url。"""
         payload = json.dumps({"password": password, "username": email})
         self._log("提交密码...")
+        sentinel_flow = "username_password_create"
+        sentinel_token = get_browser_sentinel_token(
+            session=self.session,
+            device_id=self._device_id or "",
+            flow=sentinel_flow,
+            proxy=self.proxy,
+            user_agent=(self.session.headers.get("User-Agent") or None),
+            accept_language=(self.session.headers.get("Accept-Language") or None),
+            referer=f"{AUTH_BASE}/create-account/password",
+        )
+        if not sentinel_token:
+            self._log("register: 浏览器 token 获取失败，回退纯 HTTP Sentinel")
+            sentinel_token = build_sentinel_token(
+                self.session,
+                self._device_id or "",
+                flow=sentinel_flow,
+                user_agent=(self.session.headers.get("User-Agent") or None),
+            )
 
         resp = self.session.post(
             f"{AUTH_BASE}/api/accounts/user/register",
@@ -211,7 +231,9 @@ class OAuthPkceClient:
                 "referer": f"{AUTH_BASE}/create-account/password",
                 "accept": "application/json",
                 "content-type": "application/json",
-                "openai-sentinel-token": self._sentinel or "",
+                "oai-device-id": self._device_id or "",
+                "ext-passkey-client-capabilities": "{}",
+                "openai-sentinel-token": sentinel_token or self._sentinel or "",
             },
             data=payload,
             timeout=30,
@@ -283,12 +305,34 @@ class OAuthPkceClient:
         """提交姓名和生日完成账户创建。"""
         self._log(f"创建账户: {name} ({birthdate})")
 
+        sentinel_flow = "username_password_create"
+        sentinel_token = get_browser_sentinel_token(
+            session=self.session,
+            device_id=self._device_id or "",
+            flow=sentinel_flow,
+            proxy=self.proxy,
+            user_agent=(self.session.headers.get("User-Agent") or None),
+            accept_language=(self.session.headers.get("Accept-Language") or None),
+            referer=f"{AUTH_BASE}/about-you",
+        )
+        if not sentinel_token:
+            self._log("create_account: 浏览器 token 获取失败，回退纯 HTTP Sentinel")
+            sentinel_token = build_sentinel_token(
+                self.session,
+                self._device_id or "",
+                flow=sentinel_flow,
+                user_agent=(self.session.headers.get("User-Agent") or None),
+            )
+
         resp = self.session.post(
             f"{AUTH_BASE}/api/accounts/create_account",
             headers={
                 "referer": f"{AUTH_BASE}/about-you",
                 "accept": "application/json",
                 "content-type": "application/json",
+                "oai-device-id": self._device_id or "",
+                "ext-passkey-client-capabilities": "{}",
+                **({"openai-sentinel-token": sentinel_token} if sentinel_token else {}),
             },
             data=json.dumps({"name": name, "birthdate": birthdate}),
             timeout=30,

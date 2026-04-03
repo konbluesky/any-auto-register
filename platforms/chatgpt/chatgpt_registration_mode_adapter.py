@@ -10,7 +10,7 @@ from core.base_platform import Account, AccountStatus
 
 CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN = "refresh_token"
 CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY = "access_token_only"
-DEFAULT_CHATGPT_REGISTRATION_MODE = CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
+DEFAULT_CHATGPT_REGISTRATION_MODE = CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
 
 
 def normalize_chatgpt_registration_mode(value) -> str:
@@ -41,7 +41,9 @@ def normalize_chatgpt_registration_mode(value) -> str:
 def resolve_chatgpt_registration_mode(extra: Optional[dict]) -> str:
     extra = extra or {}
     if "chatgpt_registration_mode" in extra:
-        return normalize_chatgpt_registration_mode(extra.get("chatgpt_registration_mode"))
+        return normalize_chatgpt_registration_mode(
+            extra.get("chatgpt_registration_mode")
+        )
     if "chatgpt_has_refresh_token_solution" in extra:
         return (
             CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
@@ -97,7 +99,8 @@ class BaseChatGPTRegistrationModeAdapter(ABC):
             "session_token": getattr(result, "session_token", ""),
             "workspace_id": getattr(result, "workspace_id", ""),
             "chatgpt_registration_mode": self.mode,
-            "chatgpt_has_refresh_token_solution": self.mode == CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
+            "chatgpt_has_refresh_token_solution": self.mode
+            == CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN,
             "chatgpt_token_source": getattr(result, "source", "register"),
         }
 
@@ -106,7 +109,9 @@ class RefreshTokenChatGPTRegistrationAdapter(BaseChatGPTRegistrationModeAdapter)
     mode = CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
 
     def _create_engine(self, context: ChatGPTRegistrationContext):
-        from platforms.chatgpt.refresh_token_registration_engine import RefreshTokenRegistrationEngine
+        from platforms.chatgpt.refresh_token_registration_engine import (
+            RefreshTokenRegistrationEngine,
+        )
 
         return RefreshTokenRegistrationEngine(
             email_service=context.email_service,
@@ -119,7 +124,9 @@ class AccessTokenOnlyChatGPTRegistrationAdapter(BaseChatGPTRegistrationModeAdapt
     mode = CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
 
     def _create_engine(self, context: ChatGPTRegistrationContext):
-        from platforms.chatgpt.access_token_only_registration_engine import AccessTokenOnlyRegistrationEngine
+        from platforms.chatgpt.access_token_only_registration_engine import (
+            AccessTokenOnlyRegistrationEngine,
+        )
 
         return AccessTokenOnlyRegistrationEngine(
             email_service=context.email_service,

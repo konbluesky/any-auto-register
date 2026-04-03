@@ -7,7 +7,7 @@ export type ChatGPTRegistrationMode =
   | typeof CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
 
 export const DEFAULT_CHATGPT_REGISTRATION_MODE: ChatGPTRegistrationMode =
-  CHATGPT_REGISTRATION_MODE_REFRESH_TOKEN
+  CHATGPT_REGISTRATION_MODE_ACCESS_TOKEN_ONLY
 
 export function normalizeChatGPTRegistrationMode(
   value: unknown,

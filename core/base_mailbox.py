@@ -283,6 +283,9 @@ class LaoudoMailbox(BaseMailbox):
         from curl_cffi import requests as curl_requests
 
         seen = set(before_ids) if before_ids else set()
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
         h = {"authorization": self.auth, "user-agent": self._ua}
 
         def poll_once() -> Optional[str]:
@@ -317,6 +320,8 @@ class LaoudoMailbox(BaseMailbox):
                             continue
                         code = self._safe_extract(text, code_pattern)
                         if code:
+                            if exclude_codes and code in exclude_codes:
+                                continue
                             return code
             except Exception:
                 pass
@@ -363,6 +368,9 @@ class AitreMailbox(BaseMailbox):
         import requests
 
         seen = set(before_ids) if before_ids else set()
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
         last_check = None
 
         def poll_once() -> Optional[str]:
@@ -390,6 +398,8 @@ class AitreMailbox(BaseMailbox):
                             continue
                         code = self._safe_extract(text, code_pattern)
                         if code:
+                            if exclude_codes and code in exclude_codes:
+                                continue
                             return code
             except Exception:
                 pass
@@ -452,6 +462,9 @@ class TempMailLolMailbox(BaseMailbox):
         import requests
 
         seen = set(before_ids or [])
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
         otp_sent_at = kwargs.get("otp_sent_at")
 
         def poll_once() -> Optional[str]:
@@ -484,6 +497,8 @@ class TempMailLolMailbox(BaseMailbox):
                         continue
                     code = self._safe_extract(text, code_pattern)
                     if code:
+                        if exclude_codes and code in exclude_codes:
+                            continue
                         return code
             except Exception:
                 pass
@@ -601,6 +616,9 @@ class SkyMailMailbox(BaseMailbox):
     ) -> str:
         target = account.account_id or account.email
         seen = set(before_ids or [])
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
 
         def poll_once() -> Optional[str]:
             try:
@@ -632,6 +650,8 @@ class SkyMailMailbox(BaseMailbox):
 
                     code = self._safe_extract(content, code_pattern)
                     if code:
+                        if exclude_codes and code in exclude_codes:
+                            continue
                         self._log(f"[SkyMail] 命中验证码: {code}")
                         return code
             except Exception:
@@ -756,6 +776,9 @@ class DuckMailMailbox(BaseMailbox):
         import re
 
         seen = set(before_ids or [])
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
 
         def poll_once() -> Optional[str]:
             try:
@@ -784,6 +807,8 @@ class DuckMailMailbox(BaseMailbox):
                     )
                     code = self._safe_extract(body, code_pattern)
                     if code:
+                        if exclude_codes and code in exclude_codes:
+                            continue
                         return code
             except Exception:
                 pass
@@ -947,6 +972,9 @@ class MaliAPIMailbox(BaseMailbox):
 
         self._ensure_api_key()
         seen = {str(mid) for mid in (before_ids or set())}
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
 
         def poll_once() -> Optional[str]:
             try:
@@ -981,6 +1009,8 @@ class MaliAPIMailbox(BaseMailbox):
 
                     code = self._safe_extract(search_text, code_pattern)
                     if code:
+                        if exclude_codes and code in exclude_codes:
+                            continue
                         self._log(f"[MaliAPI] 收到验证码: {code}")
                         return code
             except Exception:
@@ -1061,7 +1091,9 @@ class GPTMailMailbox(BaseMailbox):
 
         if response.status_code >= 400:
             error = payload.get("error") if isinstance(payload, dict) else ""
-            message = str(error or response.text or f"HTTP {response.status_code}").strip()
+            message = str(
+                error or response.text or f"HTTP {response.status_code}"
+            ).strip()
             raise RuntimeError(f"GPTMail API {path} 失败: {message}")
 
         if isinstance(payload, dict) and payload.get("success") is False:
@@ -1073,7 +1105,9 @@ class GPTMailMailbox(BaseMailbox):
         return payload
 
     def _list_messages(self, email: str) -> list[dict]:
-        data = self._request_json("GET", "/api/emails", params={"email": email}, timeout=10)
+        data = self._request_json(
+            "GET", "/api/emails", params={"email": email}, timeout=10
+        )
         if isinstance(data, dict):
             messages = data.get("emails", [])
         else:
@@ -1092,7 +1126,11 @@ class GPTMailMailbox(BaseMailbox):
             return MailboxAccount(
                 email=email,
                 account_id=email,
-                extra={"provider": "gptmail", "domain": self.domain, "local_address": True},
+                extra={
+                    "provider": "gptmail",
+                    "domain": self.domain,
+                    "local_address": True,
+                },
             )
 
         data = self._request_json("GET", "/api/generate-email")
@@ -1613,6 +1651,9 @@ class MoeMailMailbox(BaseMailbox):
         import re
 
         seen = set(before_ids or [])
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
 
         def poll_once() -> Optional[str]:
             try:
@@ -1641,6 +1682,8 @@ class MoeMailMailbox(BaseMailbox):
                     )
                     code = self._safe_extract(body, code_pattern)
                     if code:
+                        if exclude_codes and code in exclude_codes:
+                            continue
                         return code
             except Exception:
                 pass
@@ -1870,7 +1913,10 @@ class LuckMailMailbox(BaseMailbox):
                         raise TimeoutError(f"LuckMail 等待验证码失败: {e}") from e
 
                     last_status = str(code_result.status or "pending")
-                    if code_result.status == "success" and code_result.verification_code:
+                    if (
+                        code_result.status == "success"
+                        and code_result.verification_code
+                    ):
                         code = code_result.verification_code
                         self._log(f"[LuckMail] 收到验证码: {code}")
                         return code
@@ -2029,6 +2075,10 @@ class FreemailMailbox(BaseMailbox):
         **kwargs,
     ) -> str:
         seen = set(before_ids or [])
+        # 获取排除的验证码列表（避免二次登录时捞到旧验证码）
+        exclude_codes = {
+            str(code).strip() for code in (kwargs.get("exclude_codes") or set()) if code
+        }
 
         def poll_once() -> Optional[str]:
             try:
@@ -2045,6 +2095,9 @@ class FreemailMailbox(BaseMailbox):
                     # 直接用 verification_code 字段
                     code = str(msg.get("verification_code") or "")
                     if code and code != "None":
+                        # 检查是否在排除列表中
+                        if exclude_codes and code in exclude_codes:
+                            continue
                         return code
                     # 兜底：从 preview 提取
                     text = (
@@ -2052,6 +2105,8 @@ class FreemailMailbox(BaseMailbox):
                     )
                     code = self._safe_extract(text, code_pattern)
                     if code:
+                        if exclude_codes and code in exclude_codes:
+                            continue
                         return code
             except Exception:
                 pass

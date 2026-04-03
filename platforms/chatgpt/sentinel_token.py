@@ -14,7 +14,7 @@ import hashlib
 class SentinelTokenGenerator:
     """
     Sentinel Token 纯 Python 生成器
-    
+
     通过逆向 sentinel SDK 的 PoW 算法，纯 Python 构造合法的 openai-sentinel-token。
     """
 
@@ -55,42 +55,78 @@ class SentinelTokenGenerator:
     def _get_config(self):
         """构造浏览器环境数据数组"""
         from datetime import datetime, timezone
-        
+
         screen_info = "1920x1080"
         now = datetime.now(timezone.utc)
-        date_str = now.strftime("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)")
+        date_str = now.strftime(
+            "%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)"
+        )
         js_heap_limit = 4294705152
         nav_random1 = random.random()
         ua = self.user_agent
-        script_src = "https://sentinel.openai.com/sentinel/20260124ceb8/sdk.js"
+        script_src = "https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js"
         script_version = None
         data_build = None
         language = "en-US"
         languages = "en-US,en"
         nav_random2 = random.random()
-        
+
         nav_props = [
-            "vendorSub", "productSub", "vendor", "maxTouchPoints",
-            "scheduling", "userActivation", "doNotTrack", "geolocation",
-            "connection", "plugins", "mimeTypes", "pdfViewerEnabled",
-            "webkitTemporaryStorage", "webkitPersistentStorage",
-            "hardwareConcurrency", "cookieEnabled", "credentials",
-            "mediaDevices", "permissions", "locks", "ink",
+            "vendorSub",
+            "productSub",
+            "vendor",
+            "maxTouchPoints",
+            "scheduling",
+            "userActivation",
+            "doNotTrack",
+            "geolocation",
+            "connection",
+            "plugins",
+            "mimeTypes",
+            "pdfViewerEnabled",
+            "webkitTemporaryStorage",
+            "webkitPersistentStorage",
+            "hardwareConcurrency",
+            "cookieEnabled",
+            "credentials",
+            "mediaDevices",
+            "permissions",
+            "locks",
+            "ink",
         ]
         nav_prop = random.choice(nav_props)
         nav_val = f"{nav_prop}−undefined"
-        
-        doc_key = random.choice(["location", "implementation", "URL", "documentURI", "compatMode"])
-        win_key = random.choice(["Object", "Function", "Array", "Number", "parseFloat", "undefined"])
+
+        doc_key = random.choice(
+            ["location", "implementation", "URL", "documentURI", "compatMode"]
+        )
+        win_key = random.choice(
+            ["Object", "Function", "Array", "Number", "parseFloat", "undefined"]
+        )
         perf_now = random.uniform(1000, 50000)
         hardware_concurrency = random.choice([4, 8, 12, 16])
         time_origin = time.time() * 1000 - perf_now
 
         config = [
-            screen_info, date_str, js_heap_limit, nav_random1, ua,
-            script_src, script_version, data_build, language, languages,
-            nav_random2, nav_val, doc_key, win_key, perf_now,
-            self.sid, "", hardware_concurrency, time_origin,
+            screen_info,
+            date_str,
+            js_heap_limit,
+            nav_random1,
+            ua,
+            script_src,
+            script_version,
+            data_build,
+            language,
+            languages,
+            nav_random2,
+            nav_val,
+            doc_key,
+            win_key,
+            perf_now,
+            self.sid,
+            "",
+            hardware_concurrency,
+            time_origin,
         ]
         return config
 
@@ -138,7 +174,14 @@ class SentinelTokenGenerator:
         return "gAAAAAC" + data
 
 
-def fetch_sentinel_challenge(session, device_id, flow="authorize_continue", user_agent=None, sec_ch_ua=None, impersonate=None):
+def fetch_sentinel_challenge(
+    session,
+    device_id,
+    flow="authorize_continue",
+    user_agent=None,
+    sec_ch_ua=None,
+    impersonate=None,
+):
     """调用 sentinel 后端 API 获取 challenge 数据"""
     generator = SentinelTokenGenerator(device_id=device_id, user_agent=user_agent)
     req_body = {
@@ -146,13 +189,14 @@ def fetch_sentinel_challenge(session, device_id, flow="authorize_continue", user
         "id": device_id,
         "flow": flow,
     }
-    
+
     headers = {
         "Content-Type": "text/plain;charset=UTF-8",
         "Referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html",
         "Origin": "https://sentinel.openai.com",
         "User-Agent": user_agent or "Mozilla/5.0",
-        "sec-ch-ua": sec_ch_ua or '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+        "sec-ch-ua": sec_ch_ua
+        or '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
     }
@@ -166,19 +210,35 @@ def fetch_sentinel_challenge(session, device_id, flow="authorize_continue", user
         kwargs["impersonate"] = impersonate
 
     try:
-        resp = session.post("https://sentinel.openai.com/backend-api/sentinel/req", **kwargs)
+        resp = session.post(
+            "https://sentinel.openai.com/backend-api/sentinel/req", **kwargs
+        )
         if resp.status_code == 200:
             return resp.json()
     except Exception:
         pass
-    
+
     return None
 
 
-def build_sentinel_token(session, device_id, flow="authorize_continue", user_agent=None, sec_ch_ua=None, impersonate=None):
+def build_sentinel_token(
+    session,
+    device_id,
+    flow="authorize_continue",
+    user_agent=None,
+    sec_ch_ua=None,
+    impersonate=None,
+):
     """构建完整的 openai-sentinel-token JSON 字符串"""
-    challenge = fetch_sentinel_challenge(session, device_id, flow=flow, user_agent=user_agent, sec_ch_ua=sec_ch_ua, impersonate=impersonate)
-    
+    challenge = fetch_sentinel_challenge(
+        session,
+        device_id,
+        flow=flow,
+        user_agent=user_agent,
+        sec_ch_ua=sec_ch_ua,
+        impersonate=impersonate,
+    )
+
     if not challenge:
         return None
 
@@ -197,10 +257,14 @@ def build_sentinel_token(session, device_id, flow="authorize_continue", user_age
     else:
         p_value = generator.generate_requirements_token()
 
-    return json.dumps({
+    payload = {
         "p": p_value,
         "t": "",
         "c": c_value,
         "id": device_id,
         "flow": flow,
-    }, separators=(",", ":"))
+    }
+    if flow == "username_password_create":
+        payload["ext-passkey-client-capabilities"] = {}
+
+    return json.dumps(payload, separators=(",", ":"))

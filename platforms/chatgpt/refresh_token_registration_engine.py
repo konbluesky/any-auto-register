@@ -18,6 +18,10 @@ from curl_cffi import requests as cffi_requests
 from core.task_runtime import TaskInterruption
 from .oauth import OAuthManager, OAuthStart
 from .http_client import OpenAIHTTPClient, HTTPClientError
+from .oauth_client import OAuthClient
+from .sentinel_browser import get_browser_sentinel_token
+from .sentinel_token import build_sentinel_token
+
 # from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType  # removed: external dep
 # from ..database import crud  # removed: external dep
 # from ..database.session import get_db  # removed: external dep
@@ -40,6 +44,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RegistrationResult:
     """注册结果"""
+
     success: bool
     email: str = ""
     password: str = ""  # 注册密码
@@ -63,9 +68,13 @@ class RegistrationResult:
             "account_id": self.account_id,
             "workspace_id": self.workspace_id,
             "access_token": self.access_token[:20] + "..." if self.access_token else "",
-            "refresh_token": self.refresh_token[:20] + "..." if self.refresh_token else "",
+            "refresh_token": self.refresh_token[:20] + "..."
+            if self.refresh_token
+            else "",
             "id_token": self.id_token[:20] + "..." if self.id_token else "",
-            "session_token": self.session_token[:20] + "..." if self.session_token else "",
+            "session_token": self.session_token[:20] + "..."
+            if self.session_token
+            else "",
             "error_message": self.error_message,
             "logs": self.logs or [],
             "metadata": self.metadata or {},
@@ -76,6 +85,7 @@ class RegistrationResult:
 @dataclass
 class SignupFormResult:
     """提交注册表单的结果"""
+
     success: bool
     page_type: str = ""  # 响应中的 page.type 字段
     is_existing_account: bool = False  # 是否为已注册账号
@@ -94,7 +104,7 @@ class RefreshTokenRegistrationEngine:
         email_service,
         proxy_url: Optional[str] = None,
         callback_logger: Optional[Callable[[str], None]] = None,
-        task_uuid: Optional[str] = None
+        task_uuid: Optional[str] = None,
     ):
         """
         初始化注册引擎
@@ -114,14 +124,21 @@ class RefreshTokenRegistrationEngine:
         self.http_client = OpenAIHTTPClient(proxy_url=proxy_url)
 
         # 创建 OAuth 管理器
-        from .constants import OAUTH_CLIENT_ID, OAUTH_AUTH_URL, OAUTH_TOKEN_URL, OAUTH_REDIRECT_URI, OAUTH_SCOPE
+        from .constants import (
+            OAUTH_CLIENT_ID,
+            OAUTH_AUTH_URL,
+            OAUTH_TOKEN_URL,
+            OAUTH_REDIRECT_URI,
+            OAUTH_SCOPE,
+        )
+
         self.oauth_manager = OAuthManager(
             client_id=OAUTH_CLIENT_ID,
             auth_url=OAUTH_AUTH_URL,
             token_url=OAUTH_TOKEN_URL,
             redirect_uri=OAUTH_REDIRECT_URI,
             scope=OAUTH_SCOPE,
-            proxy_url=proxy_url  # 传递代理配置
+            proxy_url=proxy_url,  # 传递代理配置
         )
 
         # 状态变量
@@ -135,7 +152,11 @@ class RefreshTokenRegistrationEngine:
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._used_verification_codes = set()  # 已取过的验证码，避免二次登录时捞到旧码
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
-        self._token_acquisition_requires_login: bool = False  # 新注册账号需要二次登录拿 token
+        self._token_acquisition_requires_login: bool = (
+            False  # 新注册账号需要二次登录拿 token
+        )
+        self._device_id: Optional[str] = None  # 本地生成的 Device ID，全程复用
+        self._oauth_login_tokens: Optional[Dict[str, Any]] = None
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -167,7 +188,7 @@ class RefreshTokenRegistrationEngine:
 
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
         """生成随机密码"""
-        return ''.join(secrets.choice(PASSWORD_CHARSET) for _ in range(length))
+        return "".join(secrets.choice(PASSWORD_CHARSET) for _ in range(length))
 
     def _check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """检查 IP 地理位置"""
@@ -216,42 +237,38 @@ class RefreshTokenRegistrationEngine:
             return False
 
     def _get_device_id(self) -> Optional[str]:
-        """获取 Device ID"""
+        """获取 Device ID - 本地生成 UUID 并设置到 cookie，全程复用"""
+        import uuid
+
         if not self.oauth_start:
             return None
 
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            try:
-                if not self.session:
-                    self.session = self.http_client.session
-
-                response = self.session.get(
-                    self.oauth_start.auth_url,
-                    timeout=20
-                )
-                did = self.session.cookies.get("oai-did")
-
-                if did:
-                    self._log(f"Device ID: {did}")
-                    return did
-
-                self._log(
-                    f"获取 Device ID 失败: 未返回 oai-did Cookie (HTTP {response.status_code}, 第 {attempt}/{max_attempts} 次)",
-                    "warning" if attempt < max_attempts else "error"
-                )
-            except Exception as e:
-                self._log(
-                    f"获取 Device ID 失败: {e} (第 {attempt}/{max_attempts} 次)",
-                    "warning" if attempt < max_attempts else "error"
-                )
-
-            if attempt < max_attempts:
-                time.sleep(attempt)
-                self.http_client.close()
+        # 复用已有 Device ID
+        if self._device_id:
+            if not self.session:
                 self.session = self.http_client.session
+            self.session.cookies.set(
+                "oai-did", self._device_id, domain="auth.openai.com"
+            )
+            self._log(f"Device ID (复用): {self._device_id}")
+            return self._device_id
 
-        return None
+        # 首次生成 Device ID
+        did = str(uuid.uuid4())
+        self._device_id = did  # 保存到实例变量
+
+        if not self.session:
+            self.session = self.http_client.session
+        self.session.cookies.set("oai-did", did, domain="auth.openai.com")
+
+        # 访问 OAuth URL 建立会话状态
+        try:
+            self.session.get(self.oauth_start.auth_url, timeout=30)
+        except Exception as e:
+            self._log(f"访问 OAuth URL 建立会话时异常（不影响流程）: {e}", "warning")
+
+        self._log(f"Device ID (新生成): {did}")
+        return did
 
     def _check_sentinel(self, did: str) -> Optional[str]:
         """检查 Sentinel 拦截"""
@@ -284,13 +301,15 @@ class RefreshTokenRegistrationEngine:
             SignupFormResult: 提交结果，包含账号状态判断
         """
         try:
-            request_body = json.dumps({
-                "username": {
-                    "value": self.email,
-                    "kind": "email",
-                },
-                "screen_hint": screen_hint,
-            })
+            request_body = json.dumps(
+                {
+                    "username": {
+                        "value": self.email,
+                        "kind": "email",
+                    },
+                    "screen_hint": screen_hint,
+                }
+            )
 
             headers = {
                 "referer": referer,
@@ -299,13 +318,15 @@ class RefreshTokenRegistrationEngine:
             }
 
             if sen_token:
-                sentinel = json.dumps({
-                    "p": "",
-                    "t": "",
-                    "c": sen_token,
-                    "id": did,
-                    "flow": "authorize_continue",
-                })
+                sentinel = json.dumps(
+                    {
+                        "p": "",
+                        "t": "",
+                        "c": sen_token,
+                        "id": did,
+                        "flow": "authorize_continue",
+                    }
+                )
                 headers["openai-sentinel-token"] = sentinel
 
             response = self.session.post(
@@ -319,7 +340,7 @@ class RefreshTokenRegistrationEngine:
             if response.status_code != 200:
                 return SignupFormResult(
                     success=False,
-                    error_message=f"HTTP {response.status_code}: {response.text[:200]}"
+                    error_message=f"HTTP {response.status_code}: {response.text[:200]}",
                 )
 
             # 解析响应判断账号状态
@@ -342,7 +363,7 @@ class RefreshTokenRegistrationEngine:
                     success=True,
                     page_type=page_type,
                     is_existing_account=is_existing,
-                    response_data=response_data
+                    response_data=response_data,
                 )
 
             except Exception as parse_error:
@@ -371,7 +392,9 @@ class RefreshTokenRegistrationEngine:
             record_existing_account=record_existing_account,
         )
 
-    def _submit_login_start(self, did: str, sen_token: Optional[str]) -> SignupFormResult:
+    def _submit_login_start(
+        self, did: str, sen_token: Optional[str]
+    ) -> SignupFormResult:
         """提交登录入口表单。"""
         return self._submit_auth_start(
             did,
@@ -400,7 +423,7 @@ class RefreshTokenRegistrationEngine:
             if response.status_code != 200:
                 return SignupFormResult(
                     success=False,
-                    error_message=f"HTTP {response.status_code}: {response.text[:200]}"
+                    error_message=f"HTTP {response.status_code}: {response.text[:200]}",
                 )
 
             response_data = response.json()
@@ -431,7 +454,9 @@ class RefreshTokenRegistrationEngine:
         self.session_token = None
         self._otp_sent_at = None
 
-    def _prepare_authorize_flow(self, label: str) -> Tuple[Optional[str], Optional[str]]:
+    def _prepare_authorize_flow(
+        self, label: str
+    ) -> Tuple[Optional[str], Optional[str]]:
         """初始化当前阶段的授权流程，返回 device id 和 sentinel token。"""
         self._log(f"{label}: 初始化会话...")
         if not self._init_session():
@@ -456,6 +481,32 @@ class RefreshTokenRegistrationEngine:
 
     def _complete_token_exchange(self, result: RegistrationResult) -> bool:
         """在登录态已建立后，继续完成 workspace 和 OAuth token 获取。"""
+        if self._oauth_login_tokens:
+            token_info = self._oauth_login_tokens
+            result.account_id = token_info.get("account_id", "")
+            result.access_token = token_info.get("access_token", "")
+            result.refresh_token = token_info.get("refresh_token", "")
+            result.id_token = token_info.get("id_token", "")
+            result.password = self.password or ""
+            result.source = "login" if self._is_existing_account else "register"
+
+            try:
+                workspace_id = self._get_workspace_id()
+            except Exception:
+                workspace_id = None
+            if workspace_id:
+                result.workspace_id = workspace_id
+
+            session_cookie = self.session.cookies.get(
+                "__Secure-next-auth.session-token"
+            )
+            if session_cookie:
+                self.session_token = session_cookie
+                result.session_token = session_cookie
+                self._log("成功获取 Session Token")
+
+            return True
+
         self._log("等待登录验证码...")
         code = self._get_verification_code()
         if not code:
@@ -509,29 +560,73 @@ class RefreshTokenRegistrationEngine:
         return True
 
     def _restart_login_flow(self) -> Tuple[bool, str]:
-        """新注册账号完成建号后，重新发起一次登录流程拿 token。"""
+        """新注册账号完成建号后，使用独立 OAuth 登录流程拿 token。"""
         self._token_acquisition_requires_login = True
         self._log("注册完成，开始重新登录以获取 Token...")
-        self._reset_auth_flow()
 
-        did, sen_token = self._prepare_authorize_flow("重新登录")
-        if not did:
-            return False, "重新登录时获取 Device ID 失败"
-        if not sen_token:
-            return False, "重新登录时 Sentinel POW 验证失败"
+        login_did = self._device_id or self._generate_uuid_device_id()
+        oauth_client = OAuthClient(config={}, proxy=self.proxy_url, verbose=False)
+        oauth_client._log = lambda msg: self._log(f"[OAuthLogin] {msg}")
+        if self.session:
+            for header_name in ("User-Agent", "Accept-Language", "sec-ch-ua"):
+                header_value = self.session.headers.get(header_name)
+                if header_value:
+                    oauth_client.session.headers[header_name] = header_value
 
-        login_start_result = self._submit_login_start(did, sen_token)
-        if not login_start_result.success:
-            return False, f"重新登录提交邮箱失败: {login_start_result.error_message}"
-        if login_start_result.page_type != OPENAI_PAGE_TYPES["LOGIN_PASSWORD"]:
-            return False, f"重新登录未进入密码页面: {login_start_result.page_type or 'unknown'}"
+        class _EmailAdapter:
+            def __init__(self, engine):
+                self.engine = engine
 
-        password_result = self._submit_login_password()
-        if not password_result.success:
-            return False, f"重新登录提交密码失败: {password_result.error_message}"
-        if not password_result.is_existing_account:
-            return False, f"重新登录未进入验证码页面: {password_result.page_type or 'unknown'}"
+            def wait_for_verification_code(
+                self, email, timeout=60, otp_sent_at=None, exclude_codes=None
+            ):
+                if otp_sent_at:
+                    self.engine._otp_sent_at = otp_sent_at
+                code = self.engine.email_service.get_verification_code(
+                    email=self.engine.email,
+                    email_id=(
+                        self.engine.email_info.get("service_id")
+                        if self.engine.email_info
+                        else None
+                    ),
+                    timeout=timeout,
+                    pattern=OTP_CODE_PATTERN,
+                    otp_sent_at=otp_sent_at or self.engine._otp_sent_at,
+                    exclude_codes=exclude_codes or self.engine._used_verification_codes,
+                )
+                if code:
+                    self.engine._used_verification_codes.add(str(code).strip())
+                    self.engine._log(f"[OAuthLogin] 成功获取验证码: {code}")
+                return code
+
+        tokens = oauth_client.login_and_get_tokens(
+            email=self.email,
+            password=self.password or "",
+            device_id=login_did,
+            user_agent=(
+                self.session.headers.get("User-Agent") if self.session else None
+            ),
+            sec_ch_ua=(self.session.headers.get("sec-ch-ua") if self.session else None),
+            impersonate=(
+                getattr(self.http_client.config, "impersonate", None)
+                if getattr(self, "http_client", None)
+                else None
+            ),
+            skymail_client=_EmailAdapter(self),
+        )
+        if not tokens:
+            return False, oauth_client.last_error or "独立 OAuth 登录失败"
+
+        self.session = oauth_client.session
+        self._device_id = login_did
+        self._oauth_login_tokens = tokens
         return True, ""
+
+    @staticmethod
+    def _generate_uuid_device_id() -> str:
+        import uuid
+
+        return str(uuid.uuid4())
 
     def _register_password(self) -> Tuple[bool, Optional[str]]:
         """注册密码"""
@@ -542,10 +637,37 @@ class RefreshTokenRegistrationEngine:
             self._log(f"生成密码: {password}")
 
             # 提交密码注册
-            register_body = json.dumps({
-                "password": password,
-                "username": self.email
-            })
+            register_body = json.dumps({"password": password, "username": self.email})
+            sentinel_flow = "username_password_create"
+            sentinel_token = get_browser_sentinel_token(
+                session=self.session,
+                device_id=self._device_id or "",
+                flow=sentinel_flow,
+                proxy=self.proxy_url,
+                user_agent=(
+                    self.session.headers.get("User-Agent") if self.session else None
+                ),
+                accept_language=(
+                    self.session.headers.get("Accept-Language")
+                    if self.session
+                    else None
+                ),
+                referer="https://auth.openai.com/create-account/password",
+            )
+            if sentinel_token:
+                self._log("register: 已通过浏览器获取 sentinel token")
+            else:
+                self._log("register: 浏览器 token 获取失败，回退纯 HTTP Sentinel")
+                sentinel_token = build_sentinel_token(
+                    self.session,
+                    self._device_id or "",
+                    flow=sentinel_flow,
+                    user_agent=(
+                        self.session.headers.get("User-Agent") if self.session else None
+                    ),
+                )
+                if sentinel_token:
+                    self._log("register: 已回退生成 sentinel token")
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["register"],
@@ -553,6 +675,13 @@ class RefreshTokenRegistrationEngine:
                     "referer": "https://auth.openai.com/create-account/password",
                     "accept": "application/json",
                     "content-type": "application/json",
+                    "oai-device-id": self._device_id or "",
+                    "ext-passkey-client-capabilities": "{}",
+                    **(
+                        {"openai-sentinel-token": sentinel_token}
+                        if sentinel_token
+                        else {}
+                    ),
                 },
                 data=register_body,
             )
@@ -570,7 +699,11 @@ class RefreshTokenRegistrationEngine:
                     error_code = error_json.get("error", {}).get("code", "")
 
                     # 检测邮箱已注册的情况
-                    if "already" in error_msg.lower() or "exists" in error_msg.lower() or error_code == "user_exists":
+                    if (
+                        "already" in error_msg.lower()
+                        or "exists" in error_msg.lower()
+                        or error_code == "user_exists"
+                    ):
                         self._log(f"邮箱 {self.email} 可能已在 OpenAI 注册过", "error")
                         # 标记此邮箱为已注册状态
                         self._mark_email_as_registered()
@@ -598,9 +731,13 @@ class RefreshTokenRegistrationEngine:
                         email=self.email,
                         password="",  # 空密码表示未成功注册
                         email_service=self.email_service.service_type.value,
-                        email_service_id=self.email_info.get("service_id") if self.email_info else None,
+                        email_service_id=self.email_info.get("service_id")
+                        if self.email_info
+                        else None,
                         status="failed",
-                        extra_data={"register_failed_reason": "email_already_registered_on_openai"}
+                        extra_data={
+                            "register_failed_reason": "email_already_registered_on_openai"
+                        },
                     )
                     self._log(f"已在数据库中标记邮箱 {self.email} 为已注册状态")
         except Exception as e:
@@ -640,8 +777,7 @@ class RefreshTokenRegistrationEngine:
             }
             if exclude_codes:
                 self._log(
-                    "本轮取件将跳过已取过的验证码: "
-                    + ", ".join(sorted(exclude_codes))
+                    "本轮取件将跳过已取过的验证码: " + ", ".join(sorted(exclude_codes))
                 )
             code = self.email_service.get_verification_code(
                 email=self.email,
@@ -692,8 +828,39 @@ class RefreshTokenRegistrationEngine:
         """创建用户账户"""
         try:
             user_info = generate_random_user_info()
-            self._log(f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}")
+            self._log(
+                f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}"
+            )
             create_account_body = json.dumps(user_info)
+
+            sentinel_flow = "username_password_create"
+            sentinel_token = get_browser_sentinel_token(
+                session=self.session,
+                device_id=self._device_id or "",
+                flow=sentinel_flow,
+                proxy=self.proxy_url,
+                user_agent=(
+                    self.session.headers.get("User-Agent") if self.session else None
+                ),
+                accept_language=(
+                    self.session.headers.get("Accept-Language")
+                    if self.session
+                    else None
+                ),
+                referer="https://auth.openai.com/about-you",
+            )
+            if sentinel_token:
+                self._log("create_account: 已通过浏览器获取 sentinel token")
+            else:
+                self._log("create_account: 浏览器 token 获取失败，回退纯 HTTP Sentinel")
+                sentinel_token = build_sentinel_token(
+                    self.session,
+                    self._device_id or "",
+                    flow=sentinel_flow,
+                    user_agent=(
+                        self.session.headers.get("User-Agent") if self.session else None
+                    ),
+                )
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["create_account"],
@@ -701,6 +868,13 @@ class RefreshTokenRegistrationEngine:
                     "referer": "https://auth.openai.com/about-you",
                     "accept": "application/json",
                     "content-type": "application/json",
+                    "oai-device-id": self._device_id or "",
+                    "ext-passkey-client-capabilities": "{}",
+                    **(
+                        {"openai-sentinel-token": sentinel_token}
+                        if sentinel_token
+                        else {}
+                    ),
                 },
                 data=create_account_body,
             )
@@ -781,7 +955,9 @@ class RefreshTokenRegistrationEngine:
                 self._log(f"响应: {response.text[:200]}", "warning")
                 return None
 
-            continue_url = str((response.json() or {}).get("continue_url") or "").strip()
+            continue_url = str(
+                (response.json() or {}).get("continue_url") or ""
+            ).strip()
             if not continue_url:
                 self._log("workspace/select 响应里缺少 continue_url", "error")
                 return None
@@ -800,12 +976,10 @@ class RefreshTokenRegistrationEngine:
             max_redirects = 6
 
             for i in range(max_redirects):
-                self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
+                self._log(f"重定向 {i + 1}/{max_redirects}: {current_url[:100]}...")
 
                 response = self.session.get(
-                    current_url,
-                    allow_redirects=False,
-                    timeout=15
+                    current_url, allow_redirects=False, timeout=15
                 )
 
                 location = response.headers.get("Location") or ""
@@ -821,6 +995,7 @@ class RefreshTokenRegistrationEngine:
 
                 # 构建下一个 URL
                 import urllib.parse
+
                 next_url = urllib.parse.urljoin(current_url, location)
 
                 # 检查是否包含回调参数
@@ -848,7 +1023,7 @@ class RefreshTokenRegistrationEngine:
             token_info = self.oauth_manager.handle_callback(
                 callback_url=callback_url,
                 expected_state=self.oauth_start.state,
-                code_verifier=self.oauth_start.code_verifier
+                code_verifier=self.oauth_start.code_verifier,
             )
 
             self._log("OAuth 授权成功")
@@ -913,7 +1088,9 @@ class RefreshTokenRegistrationEngine:
             self._log("4. 提交注册邮箱...")
             signup_result = self._submit_signup_form(did, sen_token)
             if not signup_result.success:
-                result.error_message = f"提交注册表单失败: {signup_result.error_message}"
+                result.error_message = (
+                    f"提交注册表单失败: {signup_result.error_message}"
+                )
                 return result
 
             if self._is_existing_account:
